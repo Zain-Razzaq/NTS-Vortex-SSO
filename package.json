@@ -1,0 +1,19 @@
+{
+  "name": "vortex-sso-middleware",
+  "version": "1.0.0",
+  "description": "SSO middleware bridging NTS CRM's JWT-redirect auth with Open WebUI's trusted-header auth",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "http-proxy-middleware": "^2.0.6",
+    "jsonwebtoken": "^9.0.2",
+    "node-fetch": "^2.7.0",
+    "dotenv": "^16.4.5",
+    "cookie-parser": "^1.4.6"
+  }
+}
