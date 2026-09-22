@@ -1,5 +1,6 @@
 require('dotenv').config();
 
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const express = require('express');
@@ -156,15 +157,31 @@ app.post('/login', loginLimiter, async (req, res) => {
   }
 });
 
-// Kick off the CRM redirect.
+// Kick off the CRM redirect. A one-time state value is stashed in this
+// browser's session and appended to the returnUrl so /auth/sso can confirm
+// the token that comes back belongs to a login this same browser started
+// (confirmed with NTS: they echo extra returnUrl query params back unchanged) —
+// otherwise anyone with a validly-signed token (even their own) could plant
+// it into a victim's browser and log the victim into the wrong account.
 app.get('/auth/nts', (req, res) => {
-  const url = `${CRM_LOGIN_URL}?returnUrl=${encodeURIComponent(RETURN_URL)}`;
+  const state = crypto.randomUUID();
+  req.session.ssoState = state;
+  const returnUrl = `${RETURN_URL}?state=${encodeURIComponent(state)}`;
+  const url = `${CRM_LOGIN_URL}?returnUrl=${encodeURIComponent(returnUrl)}`;
   res.redirect(url);
 });
 
-// CRM sends the user back here with ?token=<JWT>.
+// CRM sends the user back here with ?token=<JWT>&state=<the value we sent>.
 app.get(CALLBACK_PATH, async (req, res) => {
-  const { token } = req.query;
+  const { token, state } = req.query;
+
+  const expectedState = req.session.ssoState;
+  delete req.session.ssoState;
+  if (!expectedState || state !== expectedState) {
+    console.warn('[nts-sso] SSO state mismatch — rejecting to prevent a planted-token login');
+    return res.status(401).type('html').send(renderLogin({ error: 'Your sign-in session expired or is invalid. Please try again.' }));
+  }
+
   if (!token) {
     return res.status(400).type('html').send(renderLogin({ error: 'Missing SSO token.' }));
   }
