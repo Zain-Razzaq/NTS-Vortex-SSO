@@ -8,6 +8,7 @@ const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const fetch = require('node-fetch');
 const { createProxyMiddleware } = require('http-proxy-middleware');
+const rateLimit = require('express-rate-limit');
 
 // ── Config (fail loudly if something critical is missing) ────────────
 const {
@@ -102,6 +103,21 @@ function requireSession(req, res, next) {
   return res.redirect('/login');
 }
 
+// Strip characters that would make Node's setHeader() throw or that could be
+// used to smuggle extra header lines, before a JWT/upstream-supplied value
+// (email, name) becomes a trusted header value.
+function sanitizeHeaderValue(value) {
+  return String(value).replace(/[\r\n\t\x00-\x1f\x7f]/g, '').trim();
+}
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Please try again later.' },
+});
+
 // ── Routes: login (local + NTS CRM) ───────────────────────────────────
 
 app.get('/login', (req, res) => {
@@ -109,7 +125,7 @@ app.get('/login', (req, res) => {
   res.type('html').send(renderLogin());
 });
 
-app.post('/login', async (req, res) => {
+app.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) {
     return res.status(400).type('html').send(renderLogin({ error: 'Email and password are required.' }));
@@ -207,8 +223,8 @@ app.use(
     changeOrigin: true,
     ws: true, // Open WebUI uses websockets for streaming/chat
     onProxyReq: (proxyReq, req) => {
-      proxyReq.setHeader(TRUSTED_EMAIL_HEADER, req.session.email);
-      proxyReq.setHeader(TRUSTED_NAME_HEADER, req.session.name || req.session.email);
+      proxyReq.setHeader(TRUSTED_EMAIL_HEADER, sanitizeHeaderValue(req.session.email));
+      proxyReq.setHeader(TRUSTED_NAME_HEADER, sanitizeHeaderValue(req.session.name || req.session.email));
     },
   })
 );
