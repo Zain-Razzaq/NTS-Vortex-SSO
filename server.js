@@ -27,7 +27,7 @@ const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const Database = require('better-sqlite3');
-const { createProxyMiddleware } = require('http-proxy-middleware');
+const { createProxyMiddleware, fixRequestBody } = require('http-proxy-middleware');
 const rateLimit = require('express-rate-limit');
 
 // ── Config (fail loudly if something critical is missing) ────────────
@@ -295,6 +295,13 @@ const webuiProxy = createProxyMiddleware({
   onProxyReq: (proxyReq, req) => {
     proxyReq.setHeader(TRUSTED_EMAIL_HEADER, sanitizeHeaderValue(req.session.email));
     proxyReq.setHeader(TRUSTED_NAME_HEADER, sanitizeHeaderValue(req.session.name || req.session.email));
+    // express.json()/urlencoded() above already drained the request body to
+    // populate req.body, so without this, proxied POSTs (chat messages,
+    // Open WebUI's own /api/v1/auths/signin call, etc.) reach Open WebUI
+    // with a Content-Length promising a body that never actually arrives —
+    // Open WebUI just hangs waiting for it forever. This re-serializes
+    // req.body back onto the outgoing request. See chimurai/http-proxy-middleware#320.
+    fixRequestBody(proxyReq, req);
   },
   // No onProxyReqWs here: the WebSocket upgrade event bypasses Express's
   // middleware stack entirely (no cookie-parser/session ran on it), so
