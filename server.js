@@ -1,5 +1,11 @@
 require('dotenv').config();
 
+const dns = require('dns');
+// Node on Alpine (musl libc) races parallel A/AAAA lookups against Docker's
+// embedded DNS, which intermittently surfaces as EAI_AGAIN even though the
+// name resolves fine via nslookup/wget. Preferring IPv4 avoids the race.
+dns.setDefaultResultOrder('ipv4first');
+
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
