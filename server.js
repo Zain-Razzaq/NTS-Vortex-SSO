@@ -285,6 +285,19 @@ app.get('/logout', (req, res) => {
   });
 });
 
+// Open WebUI's own "sign out" button calls this directly. In trusted-header
+// mode Open WebUI has no real concept of being logged out — it just trusts
+// whatever the header says on the very next request — so without this,
+// clicking its logout button clears nothing of ours and the following
+// request re-authenticates instantly via the still-live middleware session.
+// Destroying our session here (instead of letting this fall through to the
+// proxy) is what actually logs someone out.
+app.post('/api/v1/auths/signout', (req, res) => {
+  req.session.destroy(() => {
+    res.json({ success: true });
+  });
+});
+
 // ── Reverse proxy everything else to Open WebUI, attaching the
 //    trusted-identity headers once a session exists ──────────────────
 
