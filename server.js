@@ -25,7 +25,8 @@ const express = require('express');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
-const fetch = require('node-fetch');
+const bcrypt = require('bcryptjs');
+const Database = require('better-sqlite3');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const rateLimit = require('express-rate-limit');
 
@@ -33,6 +34,7 @@ const rateLimit = require('express-rate-limit');
 const {
   APP_PUBLIC_URL,
   OPEN_WEBUI_INTERNAL_URL,
+  OPEN_WEBUI_DB_PATH,
   CRM_LOGIN_URL,
   NTS_JWT_SECRET,
   OPEN_WEBUI_ADMIN_API_KEY,
@@ -46,6 +48,7 @@ const {
 const REQUIRED = {
   APP_PUBLIC_URL,
   OPEN_WEBUI_INTERNAL_URL,
+  OPEN_WEBUI_DB_PATH,
   CRM_LOGIN_URL,
   NTS_JWT_SECRET,
   SESSION_SECRET,
@@ -56,6 +59,27 @@ for (const [key, val] of Object.entries(REQUIRED)) {
     console.warn(`[startup warning] ${key} is not set (or still a placeholder). Related features will fail until it is configured.`);
   }
 }
+
+// Open WebUI's own /api/v1/auths/signin endpoint stops doing password
+// verification entirely once WEBUI_AUTH_TRUSTED_EMAIL_HEADER is set (it
+// requires the trusted header to be present on the request instead, and
+// has no password fallback) — so local email/password login here reads
+// Open WebUI's `auth` table directly and verifies the bcrypt hash itself.
+// This needs read access to Open WebUI's webui.db (mount its data volume
+// read-only into this container — see README).
+let webuiDb = null;
+if (OPEN_WEBUI_DB_PATH) {
+  try {
+    webuiDb = new Database(OPEN_WEBUI_DB_PATH, { readonly: true, fileMustExist: true });
+  } catch (err) {
+    console.warn(`[startup warning] could not open OPEN_WEBUI_DB_PATH (${OPEN_WEBUI_DB_PATH}): ${err.message}. Local email/password login will fail until this is fixed.`);
+  }
+}
+
+// Verified against on a lookup miss / inactive account, so a bad email and a
+// bad password take the same time as a correct email with a wrong password
+// (mirrors Open WebUI's own authenticate_user timing-safety behavior).
+const PLACEHOLDER_HASH = bcrypt.hashSync('placeholder-do-not-use', 10);
 
 const CALLBACK_PATH = '/auth/sso';
 const RETURN_URL = `${APP_PUBLIC_URL}${CALLBACK_PATH}`;
@@ -80,6 +104,7 @@ app.set('trust proxy', 1); // behind Coolify's Traefik proxy
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+app.use('/static', express.static(path.join(__dirname, 'static')));
 
 app.use(
   session({
@@ -150,22 +175,29 @@ app.post('/login', loginLimiter, async (req, res) => {
     return res.status(400).type('html').send(renderLogin({ error: 'Email and password are required.' }));
   }
 
-  try {
-    const resp = await fetch(`${OPEN_WEBUI_INTERNAL_URL}/api/v1/auths/signin`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
+  if (!webuiDb) {
+    console.error('[nts-sso] local login attempted but OPEN_WEBUI_DB_PATH is not configured/reachable');
+    return res.status(500).type('html').send(renderLogin({ error: 'Something went wrong. Please try again.' }));
+  }
 
-    if (!resp.ok) {
+  try {
+    const row = webuiDb
+      .prepare(
+        `SELECT auth.password AS password, auth.active AS active, user.email AS email, user.name AS name
+         FROM auth JOIN user ON user.id = auth.id
+         WHERE lower(auth.email) = lower(?)`
+      )
+      .get(email);
+
+    const hashToCheck = row && row.active ? row.password : PLACEHOLDER_HASH;
+    const ok = await bcrypt.compare(password, hashToCheck);
+
+    if (!row || !row.active || !ok) {
       return res.status(401).type('html').send(renderLogin({ error: 'Invalid email or password.' }));
     }
 
-    const data = await resp.json();
-    const confirmedEmail = data.email || email;
-
-    req.session.email = confirmedEmail;
-    req.session.name = data.name || confirmedEmail;
+    req.session.email = row.email;
+    req.session.name = row.name || row.email;
     req.session.via = 'local';
 
     return res.redirect('/');
