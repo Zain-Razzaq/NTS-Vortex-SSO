@@ -146,6 +146,15 @@ function escapeHtml(str) {
 
 function requireSession(req, res, next) {
   if (req.session && req.session.email) return next();
+  // Open WebUI's own frontend makes background API calls (e.g. re-trying
+  // /api/v1/auths/signin after a logout) that expect a JSON response, same
+  // as its real backend would give for an unauthenticated request. Sending
+  // an HTML redirect instead makes its own JS throw trying to parse it,
+  // which surfaces as its generic error screen. Only redirect real page
+  // navigations; answer API-style paths the way Open WebUI itself would.
+  if (req.path.startsWith('/api/') || req.path.startsWith('/ws/')) {
+    return res.status(401).json({ detail: 'Not authenticated' });
+  }
   return res.redirect('/login');
 }
 
