@@ -1,10 +1,22 @@
 require('dotenv').config();
 
 const dns = require('dns');
-// Node on Alpine (musl libc) races parallel A/AAAA lookups against Docker's
-// embedded DNS, which intermittently surfaces as EAI_AGAIN even though the
-// name resolves fine via nslookup/wget. Preferring IPv4 avoids the race.
-dns.setDefaultResultOrder('ipv4first');
+// On Alpine (musl libc), Node's dns.lookup() queries A and AAAA together,
+// and musl fails the whole lookup with EAI_AGAIN if either sub-query gets a
+// SERVFAIL from Docker's embedded DNS — even if the other one would have
+// succeeded. This network doesn't need IPv6, so force IPv4-only lookups
+// everywhere (setDefaultResultOrder alone isn't enough: it only reorders
+// results after both queries already succeeded, it doesn't skip the AAAA one).
+const originalDnsLookup = dns.lookup;
+dns.lookup = (hostname, options, callback) => {
+  if (typeof options === 'function') {
+    callback = options;
+    options = {};
+  } else if (typeof options === 'number') {
+    options = { family: options };
+  }
+  return originalDnsLookup(hostname, { ...options, family: 4 }, callback);
+};
 
 const crypto = require('crypto');
 const path = require('path');
