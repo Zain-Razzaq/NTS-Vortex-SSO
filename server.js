@@ -67,13 +67,15 @@ for (const [key, val] of Object.entries(REQUIRED)) {
 // Open WebUI's `auth` table directly and verifies the bcrypt hash itself.
 // This needs read access to Open WebUI's webui.db (mount its data volume
 // read-only into this container — see README).
-let webuiDb = null;
-if (OPEN_WEBUI_DB_PATH) {
-  try {
-    webuiDb = new Database(OPEN_WEBUI_DB_PATH, { readonly: true, fileMustExist: true });
-  } catch (err) {
-    console.warn(`[startup warning] could not open OPEN_WEBUI_DB_PATH (${OPEN_WEBUI_DB_PATH}): ${err.message}. Local email/password login will fail until this is fixed.`);
-  }
+//
+// The connection is opened fresh per login attempt and closed immediately
+// after (see the /login handler below), rather than held open for the
+// whole process lifetime — holding it open continuously kept a lock on
+// Open WebUI's live database that stalled its OWN writes (e.g. updating a
+// last-login timestamp during its trusted-header signin flow) indefinitely,
+// which is why logins appeared to hang forever with no error on either side.
+if (OPEN_WEBUI_DB_PATH && !fs.existsSync(OPEN_WEBUI_DB_PATH)) {
+  console.warn(`[startup warning] OPEN_WEBUI_DB_PATH (${OPEN_WEBUI_DB_PATH}) does not exist. Local email/password login will fail until this is fixed.`);
 }
 
 // Verified against on a lookup miss / inactive account, so a bad email and a
@@ -175,13 +177,15 @@ app.post('/login', loginLimiter, async (req, res) => {
     return res.status(400).type('html').send(renderLogin({ error: 'Email and password are required.' }));
   }
 
-  if (!webuiDb) {
-    console.error('[nts-sso] local login attempted but OPEN_WEBUI_DB_PATH is not configured/reachable');
+  if (!OPEN_WEBUI_DB_PATH) {
+    console.error('[nts-sso] local login attempted but OPEN_WEBUI_DB_PATH is not configured');
     return res.status(500).type('html').send(renderLogin({ error: 'Something went wrong. Please try again.' }));
   }
 
+  let db;
   try {
-    const row = webuiDb
+    db = new Database(OPEN_WEBUI_DB_PATH, { readonly: true, fileMustExist: true });
+    const row = db
       .prepare(
         `SELECT auth.password AS password, auth.active AS active, user.email AS email, user.name AS name
          FROM auth JOIN user ON user.id = auth.id
@@ -204,6 +208,8 @@ app.post('/login', loginLimiter, async (req, res) => {
   } catch (err) {
     console.error('[nts-sso] local login error', err);
     return res.status(500).type('html').send(renderLogin({ error: 'Something went wrong. Please try again.' }));
+  } finally {
+    if (db) db.close();
   }
 });
 
