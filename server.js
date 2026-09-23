@@ -250,24 +250,34 @@ app.get('/logout', (req, res) => {
 // ── Reverse proxy everything else to Open WebUI, attaching the
 //    trusted-identity headers once a session exists ──────────────────
 
-app.use(
-  '/',
-  requireSession,
-  createProxyMiddleware({
-    target: OPEN_WEBUI_INTERNAL_URL,
-    changeOrigin: true,
-    ws: true, // Open WebUI uses websockets for streaming/chat
-    onProxyReq: (proxyReq, req) => {
-      proxyReq.setHeader(TRUSTED_EMAIL_HEADER, sanitizeHeaderValue(req.session.email));
-      proxyReq.setHeader(TRUSTED_NAME_HEADER, sanitizeHeaderValue(req.session.name || req.session.email));
-    },
-  })
-);
+const webuiProxy = createProxyMiddleware({
+  target: OPEN_WEBUI_INTERNAL_URL,
+  changeOrigin: true,
+  ws: true, // Open WebUI uses websockets for streaming/chat
+  onProxyReq: (proxyReq, req) => {
+    proxyReq.setHeader(TRUSTED_EMAIL_HEADER, sanitizeHeaderValue(req.session.email));
+    proxyReq.setHeader(TRUSTED_NAME_HEADER, sanitizeHeaderValue(req.session.name || req.session.email));
+  },
+  // No onProxyReqWs here: the WebSocket upgrade event bypasses Express's
+  // middleware stack entirely (no cookie-parser/session ran on it), so
+  // req.session doesn't exist on it — Open WebUI's own cookie, already
+  // issued to the browser from the first trusted-header HTTP request,
+  // authenticates the socket instead. Worth confirming this holds once
+  // testing against the real Open WebUI instance.
+});
 
-app.listen(PORT, () => {
+app.use('/', requireSession, webuiProxy);
+
+const server = app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`[nts-sso] middleware listening on :${PORT}`);
   console.log(`[nts-sso] public URL: ${APP_PUBLIC_URL}`);
   console.log(`[nts-sso] proxying to: ${OPEN_WEBUI_INTERNAL_URL}`);
   console.log(`[nts-sso] CRM callback: ${RETURN_URL}`);
 });
+
+// http-proxy-middleware's automatic upgrade-event wiring isn't reliable
+// behind an extra reverse-proxy hop (Coolify/Traefik) — wire it explicitly
+// so WebSocket upgrades (chat streaming) actually reach Open WebUI instead
+// of proxying to an undefined target.
+server.on('upgrade', webuiProxy.upgrade);
