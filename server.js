@@ -42,7 +42,7 @@ const {
   TRUSTED_EMAIL_HEADER = 'X-User-Email',
   TRUSTED_NAME_HEADER = 'X-User-Name',
   PORT = 3000,
-  APP_NAME = 'Vortex',
+  APP_NAME = 'NTS Vortex',
 } = process.env;
 
 const REQUIRED = {
