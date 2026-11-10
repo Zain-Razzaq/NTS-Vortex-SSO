@@ -107,6 +107,9 @@ app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use('/static', express.static(path.join(__dirname, 'static')));
+// Browsers request /favicon.ico from the root regardless of <link> tags
+app.get('/favicon.ico', (_req, res) =>
+  res.sendFile(path.join(__dirname, 'static', 'favicon.ico')));
 
 app.use(
   session({
